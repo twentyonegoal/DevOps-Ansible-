@@ -1,0 +1,180 @@
+- name: Install ntp,python3-psycopg2,curl,ca-certificates
+  hosts: postgresql_server    
+  become: yes   
+
+  tasks: 
+    - name: Install packages
+      apt:
+        pkg:
+         - ntp
+         - python3-psycopg2
+         - curl
+         - ca-certificates
+
+- name: Start ntp
+  hosts: postgresql_server
+  become: yes   
+  tasks:
+    - name: Start ntp
+      systemd_service: 
+        state: started
+        enabled: true
+        name: ntp
+
+#https://www.postgresql.org/download/linux/debian/
+- name: Add postgresql repository and install postgresql-16
+  hosts: postgresql_server   
+  become: yes   
+
+  tasks: 
+    - name: Add repo
+      shell: |
+        install -d /usr/share/postgresql-common/pgdg
+        curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+        sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+#install postgresql-16
+    - name: Install packages
+      apt:
+        name: postgresql-16
+        update_cache: yes
+
+- name: Configuring postgresql
+  hosts: postgresql_server   
+  become: yes   
+  vars_files:
+    - vars.yml 
+  tasks:
+
+    - name: Edit config file postgresql.conf(listen_addresses)
+      postgresql_set:
+        name: listen_addresses
+        value: '*'
+      become_user: postgres
+
+- name: Restart postgresql
+  hosts: postgresql_server    
+  become: yes   
+  tasks:
+    - name: Restart postgres
+      systemd_service: 
+        state: restarted
+        name: postgresql
+
+- name: Config iptables
+  hosts: postgresql_server    
+  become: yes   
+  vars_files:
+    - vars.yml 
+  tasks:
+    - name: loopback input
+      iptables: 
+        chain: INPUT
+        in_interface: lo
+        jump: ACCEPT
+
+    - name: loopback output
+      iptables: 
+        chain: OUTPUT
+        out_interface: lo
+        jump: ACCEPT
+
+    - name: Accept input postgresql traffic
+      iptables:
+        chain: INPUT
+        protocol: tcp
+        source: "{{ listen_address }}"
+        destination_port: 5432
+        jump: ACCEPT
+    - name: Accept output postgresql traffic
+      iptables:
+        chain: OUTPUT
+        protocol: tcp
+        destination: "{{ listen_address }}"
+        source_port: 5432
+        jump: ACCEPT
+
+    - name: Accept input DNS
+      iptables:
+        chain: INPUT
+        protocol: udp
+        source: "{{ ip_dns_server }}"
+        source_port: 53
+        jump: ACCEPT
+
+    - name: Accept output DNS
+      iptables:
+        chain: OUTPUT
+        protocol: udp
+        destination: "{{ ip_dns_server }}"
+        destination_port: 53
+        jump: ACCEPT
+
+    - name: Accept input NTP
+      iptables:
+        chain: INPUT
+        protocol: udp
+        source: "{{ ip_ntp_server }}"
+        source_port: 123
+        jump: ACCEPT
+
+    - name: Accept output NTP
+      iptables:
+        chain: OUTPUT
+        protocol: udp
+        destination: "{{ ip_ntp_server }}"
+        destination_port: 123
+        jump: ACCEPT
+
+    - name: Accept output SSH
+      iptables:
+        chain: OUTPUT
+        protocol: tcp
+        source_port: 22
+        jump: ACCEPT
+
+    - name: Accept input SSH
+      iptables:
+        chain: INPUT
+        protocol: tcp
+        destination_port: 22
+        jump: ACCEPT
+
+    - name: Accept output 80,443
+      iptables:
+        chain: OUTPUT
+        protocol: tcp
+        destination_ports:
+          - "80"
+          - "443"   
+        jump: ACCEPT
+
+    - name: Allow related and established connections
+      iptables:
+        chain: INPUT
+        ctstate: ESTABLISHED,RELATED
+        jump: ACCEPT
+
+    - name: Set the policy for the INPUT chain to DROP
+      iptables:
+        chain: INPUT
+        policy: DROP
+
+    - name: Set the policy for the OUTPUT chain to DROP
+      iptables:
+        chain: OUTPUT
+        policy: DROP
+
+    - name: Set the policy for the FORWARD chain to DROP
+      iptables:
+        chain: FORWARD
+        policy: DROP
+
+- name: Install iptables-persistent
+  hosts: postgresql_server    
+  become: yes
+
+  tasks: 
+    - name: Install packages iptables-persistent
+      apt:
+        pkg:
+         - iptables-persistent
